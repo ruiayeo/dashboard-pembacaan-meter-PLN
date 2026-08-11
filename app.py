@@ -60,98 +60,15 @@ st.markdown("""
 # Header
 st.markdown('<div class="main-header">DASHBOARD ANALISIS POLA KERJA PEMBACAAN METER</div>',
             unsafe_allow_html=True)
-st.markdown('<div class="sub-header">PT PLN (Persero) - Unit Pelayanan Garut (UNITUP 53277)</div>',
-            unsafe_allow_html=True)
 
-# Sidebar
-st.sidebar.markdown("---")
-st.sidebar.header("DATA INPUT")
-uploaded_file = st.sidebar.file_uploader("Unggah File Data (Format: .xlsx)", type="xlsx")
-st.sidebar.markdown("---")
 
-if uploaded_file is not None:
-    # Read data
-    df = pd.read_excel(uploaded_file)
-
-    # Parse WAKTU column
-    def parse_waktu(waktu_str):
-        if pd.isna(waktu_str):
-            return None
-        try:
-            parts = str(waktu_str).strip().split()
-            if len(parts) == 2:
-                days = int(parts[0])
-                time_parts = parts[1].split(':')
-                hours = int(time_parts[0])
-                minutes = int(time_parts[1])
-                seconds = int(time_parts[2]) if len(time_parts) > 2 else 0
-                total_seconds = days * 86400 + hours * 3600 + minutes * 60 + seconds
-                return total_seconds
-        except:
-            pass
-        return None
-
-    # Data processing
-    df['WAKTU_SECONDS'] = df['WAKTU'].apply(parse_waktu)
-    df['DURASI_MENIT'] = df['WAKTU_SECONDS'] / 60
-    df['DURASI_KATEGORI'] = pd.cut(df['DURASI_MENIT'],
-                                   bins=[0, 1, 5, 10, 30, 60, float('inf')],
-                                   labels=['<1 min', '1-5 min', '5-10 min',
-                                          '10-30 min', '30-60 min', '>60 min'])
-
-    # Parse date & time
-    df['DATETIME'] = pd.to_datetime(df['TGLBACA'], dayfirst=True)
-    df['TANGGAL'] = df['DATETIME'].dt.date
-    df['JAM'] = df['DATETIME'].dt.hour
-    df['HARI'] = df['DATETIME'].dt.day_name()
-    df['MENIT'] = df['DATETIME'].dt.minute
-
-    # Ensure coordinate columns are numeric
-    df['LATITUDE'] = pd.to_numeric(df['LATITUDE'], errors='coerce')
-    df['LONGITUDE'] = pd.to_numeric(df['LONGITUDE'], errors='coerce')
-
-    # Location validation (Garut area bounds)
-    df['LOKASI_VALID'] = (
-        df['LATITUDE'].between(-7.9, -7.3, inclusive='both') &
-        df['LONGITUDE'].between(107.4, 108.0, inclusive='both')
+def render_dashboard(df, tanggal_label):
+    """Render the complete dashboard for one date."""
+    st.markdown(
+        f'<div class="sub-header">PT PLN (Persero) - Unit Pelayanan Garut '
+        f'(UNITUP 53277) — {tanggal_label}</div>',
+        unsafe_allow_html=True
     )
-
-    # Shift classification
-    def classify_shift(hour):
-        if 6 <= hour < 12:
-            return 'Pagi (06:00-12:00)'
-        elif 12 <= hour < 17:
-            return 'Siang (12:00-17:00)'
-        else:
-            return 'Sore/Malam (17:00+)'
-
-    df['SHIFT'] = df['JAM'].apply(classify_shift)
-
-    # Efficiency scoring
-    def efficiency_score(durasi):
-        if pd.isna(durasi):
-            return None
-        if durasi < 1:
-            return 'Sangat Baik'
-        elif durasi < 5:
-            return 'Baik'
-        elif durasi < 10:
-            return 'Cukup'
-        elif durasi < 30:
-            return 'Lambat'
-        else:
-            return 'Sangat Lambat'
-
-    df['EFFICIENCY'] = df['DURASI_MENIT'].apply(efficiency_score)
-
-    # Color mapping for efficiency
-    efficiency_colors = {
-        'Sangat Baik': '#2ecc71',
-        'Baik': '#3498db',
-        'Cukup': '#f39c12',
-        'Lambat': '#e74c3c',
-        'Sangat Lambat': '#c0392b'
-    }
 
     # === TAB STRUCTURE ===
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -456,126 +373,137 @@ if uploaded_file is not None:
             display_outliers = outliers[['NOMOR', 'IDPEL', 'TGLBACA', 'DURASI_MENIT', 'EFFICIENCY', 'LOKASI_VALID']].head(20).copy()
             display_outliers.columns = ['Nomor', 'ID Pel', 'Tanggal Baca', 'Durasi (menit)', 'Efisiensi', 'Lokasi Valid']
             st.dataframe(display_outliers, use_container_width=True, height=400)
-        else:
-            st.info("Tidak ada aktivitas anomali terdeteksi dalam dataset.")
 
-    # === TAB 5: ANALISIS GEOGRAFIS ===
-    with tab5:
-        st.markdown('<div class="tab-header">ANALISIS GEOGRAFIS POLA KERJA</div>', unsafe_allow_html=True)
 
-        col1, col2 = st.columns(2)
+# Sidebar
+st.sidebar.markdown("---")
+st.sidebar.header("DATA INPUT")
+uploaded_file = st.sidebar.file_uploader(
+    "Unggah File Data (Format: .xlsx)",
+    type=["xlsx"]
+)
+st.sidebar.markdown("---")
 
-        with col1:
-            st.markdown("**Peta Sebaran Aktivitas Pembacaan Meter**")
-            lat_center = df['LATITUDE'].mean()
-            lon_center = df['LONGITUDE'].mean()
+if uploaded_file is not None:
+    try:
+        # Read data
+        df = pd.read_excel(uploaded_file)
 
-            m = folium.Map(location=[lat_center, lon_center], zoom_start=13, tiles='OpenStreetMap')
+        required_cols = ["NOMOR", "WAKTU", "LATITUDE", "LONGITUDE", "TGLBACA", "IDPEL"]
+        missing_cols = [c for c in required_cols if c not in df.columns]
 
-            # Add boundary rectangle for Garut area
-            folium.Rectangle(
-                bounds=[[-7.9, 107.4], [-7.3, 108.0]],
-                color='#003366',
-                fill=True,
-                fillColor='#003366',
-                fillOpacity=0.1,
-                weight=2,
-                popup='Area Layanan Garut',
-                dash_array='5, 5'
-            ).add_to(m)
+        if missing_cols:
+            st.error("Kolom berikut tidak ditemukan: " + ", ".join(missing_cols))
+            st.stop()
 
-            for idx, row in df.iterrows():
-                if row['LOKASI_VALID']:
-                    color = '#2ecc71'
-                    prefix = 'Valid'
-                else:
-                    color = '#e74c3c'
-                    prefix = 'Invalid'
+        # Parse WAKTU column
+        def parse_waktu(waktu_str):
+            if pd.isna(waktu_str):
+                return None
+            try:
+                parts = str(waktu_str).strip().split()
+                if len(parts) == 2:
+                    days = int(parts[0])
+                    time_parts = parts[1].split(":")
+                    hours = int(time_parts[0])
+                    minutes = int(time_parts[1])
+                    seconds = int(time_parts[2]) if len(time_parts) > 2 else 0
+                    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+            except (ValueError, TypeError):
+                return None
+            return None
 
-                folium.CircleMarker(
-                    location=[row['LATITUDE'], row['LONGITUDE']],
-                    radius=3,
-                    popup=f"Durasi: {row['DURASI_MENIT']:.1f} min | Status: {prefix}",
-                    tooltip=f"{row['DURASI_MENIT']:.1f} min",
-                    color=color,
-                    fill=True,
-                    fillOpacity=0.7,
-                    weight=1
-                ).add_to(m)
+        df["WAKTU_SECONDS"] = df["WAKTU"].apply(parse_waktu)
+        df["DURASI_MENIT"] = df["WAKTU_SECONDS"] / 60
 
-            st_folium(m, width=700, height=500)
+        df["DURASI_KATEGORI"] = pd.cut(
+            df["DURASI_MENIT"],
+            bins=[0, 1, 5, 10, 30, 60, float("inf")],
+            labels=["<1 min", "1-5 min", "5-10 min", "10-30 min", "30-60 min", ">60 min"]
+        )
 
-        with col2:
-            st.markdown("**Validasi Lokasi Geografis**")
+        # Parse date & time
+        df["DATETIME"] = pd.to_datetime(df["TGLBACA"], dayfirst=True, errors="coerce")
+        df["TANGGAL"] = df["DATETIME"].dt.date
+        df["JAM"] = df["DATETIME"].dt.hour
+        df["HARI"] = df["DATETIME"].dt.day_name()
+        df["MENIT"] = df["DATETIME"].dt.minute
 
-            valid_count = df['LOKASI_VALID'].sum()
-            invalid_count = len(df) - valid_count
-            valid_pct = (valid_count / len(df)) * 100 if len(df) else 0
+        # Coordinate validation
+        df["LATITUDE"] = pd.to_numeric(df["LATITUDE"], errors="coerce")
+        df["LONGITUDE"] = pd.to_numeric(df["LONGITUDE"], errors="coerce")
+        df["LOKASI_VALID"] = (
+            df["LATITUDE"].between(-7.9, -7.3, inclusive="both")
+            & df["LONGITUDE"].between(107.4, 108.0, inclusive="both")
+        )
 
-            st.metric("Lokasi Valid (Garut)", f"{valid_pct:.1f}%", f"{valid_count} dari {len(df)} aktivitas")
+        # Shift classification
+        def classify_shift(hour):
+            if pd.isna(hour):
+                return "Tidak diketahui"
+            if 6 <= hour < 12:
+                return "Pagi (06:00-12:00)"
+            elif 12 <= hour < 17:
+                return "Siang (12:00-17:00)"
+            return "Sore/Malam (17:00+)"
 
-            st.markdown("---")
-            st.markdown("**Durasi Rata-rata Berdasarkan Validasi Lokasi**")
+        df["SHIFT"] = df["JAM"].apply(classify_shift)
 
-            loc_analysis = df.groupby('LOKASI_VALID')['DURASI_MENIT'].agg(['count', 'mean']).reset_index()
-            loc_analysis['Status'] = loc_analysis['LOKASI_VALID'].map({True: 'Di Dalam Area', False: 'Di Luar Area'})
+        # Efficiency scoring
+        def efficiency_score(durasi):
+            if pd.isna(durasi):
+                return None
+            if durasi < 1:
+                return "Sangat Baik"
+            elif durasi < 5:
+                return "Baik"
+            elif durasi < 10:
+                return "Cukup"
+            elif durasi < 30:
+                return "Lambat"
+            return "Sangat Lambat"
 
-            fig_loc = go.Figure()
-            fig_loc.add_trace(go.Bar(
-                x=loc_analysis['Status'],
-                y=loc_analysis['mean'],
-                marker=dict(color=['#2ecc71', '#e74c3c']),
-                text=loc_analysis['count'],
-                texttemplate='n=%{text}',
-                textposition='outside',
-                hovertemplate='<b>%{x}</b><br>Rata-rata: %{y:.2f} menit<extra></extra>'
-            ))
-            fig_loc.update_layout(
-                showlegend=False,
-                margin=dict(l=40, r=40, t=40, b=40),
-                xaxis_title="Status Lokasi",
-                yaxis_title="Durasi Rata-rata (menit)",
-                plot_bgcolor='rgba(240, 240, 240, 0.5)'
-            )
-            st.plotly_chart(fig_loc, use_container_width=True)
+        df["EFFICIENCY"] = df["DURASI_MENIT"].apply(efficiency_score)
 
-    # === TAB 6: DATA DETAIL ===
-    with tab6:
-        st.markdown('<div class="tab-header">DATA DETAIL AKTIVITAS PEMBACAAN</div>', unsafe_allow_html=True)
+        efficiency_colors = {
+            "Sangat Baik": "#2ecc71",
+            "Baik": "#3498db",
+            "Cukup": "#f39c12",
+            "Lambat": "#e74c3c",
+            "Sangat Lambat": "#c0392b"
+        }
 
-        st.markdown("**Filter Data**")
-        col1, col2, col3 = st.columns(3)
+        # Separate dashboard by day-of-month.
+        day25_df = df[df["TANGGAL"].apply(lambda x: getattr(x, "day", None) == 25)].copy()
+        day26_df = df[df["TANGGAL"].apply(lambda x: getattr(x, "day", None) == 26)].copy()
 
-        with col1:
-            selected_date = st.multiselect("Tanggal", sorted(df['TANGGAL'].unique(), reverse=True))
+        date25, date26 = st.tabs(["📅 TANGGAL 25", "📅 TANGGAL 26"])
 
-        with col2:
-            selected_shift = st.multiselect("Shift", ['Pagi (06:00-12:00)', 'Siang (12:00-17:00)', 'Sore/Malam (17:00+)'])
+        with date25:
+            if day25_df.empty:
+                st.info("Tidak ada data untuk tanggal 25.")
+            else:
+                render_dashboard(day25_df, "Tanggal 25")
 
-        with col3:
-            selected_eff = st.multiselect("Efisiensi", ['Sangat Baik', 'Baik', 'Cukup', 'Lambat', 'Sangat Lambat'])
+        with date26:
+            if day26_df.empty:
+                st.info("Tidak ada data untuk tanggal 26.")
+            else:
+                render_dashboard(day26_df, "Tanggal 26")
 
-        # Filter data
-        filtered_df = df.copy()
-        if selected_date:
-            filtered_df = filtered_df[filtered_df['TANGGAL'].isin(selected_date)]
-        if selected_shift:
-            filtered_df = filtered_df[filtered_df['SHIFT'].isin(selected_shift)]
-        if selected_eff:
-            filtered_df = filtered_df[filtered_df['EFFICIENCY'].isin(selected_eff)]
-
-        # Display columns
-        display_cols = ['NOMOR', 'IDPEL', 'TGLBACA', 'DURASI_MENIT',
-                        'JAM', 'SHIFT', 'EFFICIENCY', 'LATITUDE', 'LONGITUDE', 'LOKASI_VALID']
-
-        display_data = filtered_df[display_cols].copy()
-        display_data.columns = ['Nomor', 'ID Pel', 'Tanggal Baca', 'Durasi (menit)',
-                                'Jam', 'Shift', 'Efisiensi', 'Latitude', 'Longitude', 'Lokasi Valid']
-
-        st.dataframe(display_data, use_container_width=True, height=600)
-
-        st.markdown(f"**Total Record: {len(filtered_df)} dari {len(df)} data**")
-
+    except Exception as e:
+        st.error(f"Terjadi error saat memproses file: {e}")
 else:
-    st.markdown('<div class="info-box">Silakan unggah file data Excel pada sidebar untuk memulai analisis. File harus berisi kolom: WAKTU, LATITUDE, LONGITUDE, TGLBACA, IDPEL</div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="info-box">Silakan unggah file data Excel pada sidebar '
+        'untuk memulai analisis. File harus berisi kolom: WAKTU, LATITUDE, '
+        'LONGITUDE, TGLBACA, IDPEL</div>',
+        unsafe_allow_html=True
+    )
+    st.info(
+        "Format file yang diharapkan:\n"
+        "- WAKTU: Format duration (misal: 0 00:12:45)\n"
+        "- TGLBACA: Format tanggal\n"
+        "- IDPEL: ID Pelanggan\n"
+        "- LATITUDE & LONGITUDE: Koordinat GPS"
+    )
